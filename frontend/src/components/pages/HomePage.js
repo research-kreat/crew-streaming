@@ -32,6 +32,7 @@ export default function Home() {
     
     try {
       const data = JSON.parse(lastMessage.data);
+      console.log("Received WebSocket data:", data);
       
       // Handle error
       if (data.error) {
@@ -74,7 +75,7 @@ export default function Home() {
         setIsStreaming(false);
       }
     } catch (err) {
-      console.error("Failed to parse WebSocket message:", err);
+      console.error("Failed to parse WebSocket message:", err, lastMessage);
     }
   }, [lastMessage]);
 
@@ -97,12 +98,24 @@ export default function Home() {
     }));
     
     // Send to WebSocket
-    sendMessage(JSON.stringify({
+    const result = sendMessage(JSON.stringify({
       user_input: message,
       title_context: title,
       abstract_context: abstract,
       conversation_history: conversationHistory
     }));
+    
+    console.log("Message sent:", result);
+    
+    // If message failed to send, reset streaming state
+    if (!result) {
+      setIsStreaming(false);
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: 'Failed to connect to server. Please check your connection and try again.', 
+        complete: true 
+      }]);
+    }
   };
 
   return (
@@ -138,7 +151,7 @@ export default function Home() {
       {/* Status indicator */}
       {!connected && (
         <div className="bg-yellow-100 p-2 text-center text-yellow-800">
-          Connecting to server...
+          Connecting to server... (Status: {connected ? 'Connected' : 'Disconnected'})
         </div>
       )}
       
@@ -146,8 +159,9 @@ export default function Home() {
       <div className="p-4 bg-white border-t">
         <ChatInput 
           onSendMessage={handleSendMessage} 
-          isDisabled={isStreaming || !connected} 
+          isDisabled={!connected} 
           isStreaming={isStreaming}
+          connectionError={!connected}
         />
       </div>
     </div>

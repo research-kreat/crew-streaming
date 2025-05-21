@@ -10,16 +10,10 @@ const useWebSocket = (url) => {
   useEffect(() => {
     // Parse URL to get base and path
     let baseUrl = socketUrl;
-    let path = '/api/ws';
-    
-    if (socketUrl.includes('/api/ws')) {
-      // Extract base URL without the path
-      baseUrl = socketUrl.split('/api/ws')[0];
-    }
     
     // Create socket.io connection
     const socketInstance = io(baseUrl, {
-      path: path,
+      path: '/api/ws',
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 3000,
@@ -38,6 +32,7 @@ const useWebSocket = (url) => {
     });
 
     socketInstance.on('message', (data) => {
+      console.log('Received message:', data);
       setLastMessage({ data: JSON.stringify(data) });
     });
 
@@ -60,9 +55,11 @@ const useWebSocket = (url) => {
   // Function to send messages through the WebSocket
   const sendMessage = useCallback((message) => {
     if (socket && socket.connected) {
+      console.log('Sending message:', message);
       socket.emit('message', message);
       return true;
     }
+    console.warn('Cannot send message: Socket not connected');
     return false;
   }, [socket]);
 
