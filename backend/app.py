@@ -13,12 +13,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={r"/*": {"origins": "*"}}) 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 class CrewAIHandler:
     def __init__(self):
-        # Initialize with CrewAI's LLM
         self.llm = LLM(
             model="azure/gpt-4o-mini",
             temperature=0.7
