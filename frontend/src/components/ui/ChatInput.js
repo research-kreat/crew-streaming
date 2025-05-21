@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-export default function ChatInput({ onSendMessage, isDisabled, isStreaming }) {
+export default function ChatInput({ onSendMessage, isDisabled, isStreaming, connectionError }) {
   const [message, setMessage] = useState('');
 
   const handleSubmit = (e) => {
@@ -19,7 +19,13 @@ export default function ChatInput({ onSendMessage, isDisabled, isStreaming }) {
         value={message}
         onChange={(e) => setMessage(e.target.value)}
         disabled={isDisabled}
-        placeholder={isStreaming ? "Waiting for response..." : "Type your message..."}
+        placeholder={
+          connectionError 
+            ? "Connection lost. Please try again later." 
+            : isStreaming 
+              ? "Waiting for response..." 
+              : "Type your message..."
+        }
         className="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
       />
       <button
@@ -35,6 +41,8 @@ export default function ChatInput({ onSendMessage, isDisabled, isStreaming }) {
             </svg>
             Thinking...
           </div>
+        ) : connectionError ? (
+          "Reconnect"
         ) : (
           "Send"
         )}

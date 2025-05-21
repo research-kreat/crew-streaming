@@ -12,10 +12,22 @@ export default function Home() {
   const [isStreaming, setIsStreaming] = useState(false);
   const messagesEndRef = useRef(null);
   
-  // WebSocket hook
-  const { sendMessage, lastMessage, readyState, connected } = useWebSocket(
+  // Track backend unavailability
+  const [backendError, setBackendError] = useState(null);
+  
+  // WebSocket hook with error handling
+  const { sendMessage, lastMessage, readyState, connected, connecting, error, reconnect } = useWebSocket(
     process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/api/ws'
   );
+
+  // Update backend error state when WebSocket errors occur
+  useEffect(() => {
+    if (error) {
+      setBackendError(error);
+    } else {
+      setBackendError(null);
+    }
+  }, [error]);
 
   // Handle scrolling to bottom of messages
   useEffect(() => {
@@ -75,6 +87,7 @@ export default function Home() {
       }
     } catch (err) {
       console.error("Failed to parse WebSocket message:", err);
+      setIsStreaming(false);
     }
   }, [lastMessage]);
 
@@ -97,12 +110,30 @@ export default function Home() {
     }));
     
     // Send to WebSocket
-    sendMessage(JSON.stringify({
+    const success = sendMessage(JSON.stringify({
       user_input: message,
       title_context: title,
       abstract_context: abstract,
       conversation_history: conversationHistory
     }));
+    
+    // If message couldn't be sent, show an error
+    if (!success) {
+      setMessages(prev => [
+        ...prev, 
+        { 
+          role: 'assistant', 
+          content: 'Failed to send message. The connection to the server may be lost.', 
+          complete: true 
+        }
+      ]);
+      setIsStreaming(false);
+    }
+  };
+  
+  // Handle manual reconnection
+  const handleReconnect = () => {
+    reconnect();
   };
 
   return (
@@ -112,6 +143,33 @@ export default function Home() {
         <h1 className="text-2xl font-bold text-gray-800">CrewAI Chat with Mistral</h1>
         <p className="text-sm text-gray-500">Using Ollama + CrewAI for natural conversations</p>
       </header>
+      
+      {/* Connection Status Banner */}
+      {!connected && (
+        <div className={`p-3 text-center ${connecting ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>
+          {connecting ? (
+            <div className="flex items-center justify-center">
+              <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Connecting to server...
+            </div>
+          ) : (
+            <div>
+              <p className="font-semibold mb-2">
+                Connection Error: {backendError || 'Unable to connect to the server'}
+              </p>
+              <button 
+                onClick={handleReconnect}
+                className="px-4 py-1 bg-red-600 text-white rounded hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 transition-colors"
+              >
+                Try Again
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       
       {/* Chat Messages */}
       <div className="flex-1 overflow-y-auto p-4">
@@ -135,19 +193,13 @@ export default function Home() {
         <div ref={messagesEndRef} />
       </div>
       
-      {/* Status indicator */}
-      {!connected && (
-        <div className="bg-yellow-100 p-2 text-center text-yellow-800">
-          Connecting to server...
-        </div>
-      )}
-      
       {/* Input */}
       <div className="p-4 bg-white border-t">
         <ChatInput 
           onSendMessage={handleSendMessage} 
           isDisabled={isStreaming || !connected} 
           isStreaming={isStreaming}
+          connectionError={!connected && !connecting}
         />
       </div>
     </div>

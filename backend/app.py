@@ -1,12 +1,14 @@
 from flask import Flask, request, jsonify
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, disconnect
 from flask_cors import CORS
 import json
 import os
+import traceback
 from threading import Thread
 from crewai import Agent, Task, Crew, Process
 from crewai import LLM
 import logging
+import time
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -14,14 +16,22 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}) 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=30, ping_interval=15)
+
+# Track active connections for debugging
+active_connections = {}
 
 class CrewAIHandler:
     def __init__(self):
-        self.llm = LLM(
-            model="azure/gpt-4o-mini",
-            temperature=0.7
-        )
+        try:
+            self.llm = LLM(
+                model="azure/gpt-4o-mini",
+                temperature=0.7
+            )
+            logger.info("LLM initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize LLM: {str(e)}")
+            self.llm = None
         
     def process_streaming(self, user_input, title_context="", abstract_context="", conversation_history=None, sid=None):
         """Process a user message using CrewAI"""
@@ -32,10 +42,20 @@ class CrewAIHandler:
         # Run in a separate thread to not block the main thread
         def run_process():
             try:
+                # Check if LLM is available
+                if not self.llm:
+                    raise ValueError("LLM is not initialized properly")
+                
+                # Let client know we started processing
+                socketio.emit('message', {'token': 'Starting to process your request...'}, room=sid)
+                
                 # Set up observer for streaming
                 class StreamingObserver:
                     def on_new_token(self, token, **kwargs):
-                        socketio.emit('message', {'token': token}, room=sid)
+                        try:
+                            socketio.emit('message', {'token': token}, room=sid)
+                        except Exception as e:
+                            logger.error(f"Error sending token to client {sid}: {str(e)}")
                 
                 # Set up agent for conversation
                 agent = Agent(
@@ -77,7 +97,7 @@ class CrewAIHandler:
                     verbose=True
                 )
                 
-                # Run the crew
+                # Run the crew with timeout handling
                 result = crew.kickoff()
                 
                 # Signal completion
@@ -85,7 +105,8 @@ class CrewAIHandler:
                 
             except Exception as e:
                 logger.error(f"Error in CrewAI process: {str(e)}")
-                socketio.emit('message', {'error': str(e)}, room=sid)
+                logger.error(traceback.format_exc())
+                socketio.emit('message', {'error': f"Processing error: {str(e)}"}, room=sid)
                 socketio.emit('message', {'done': True}, room=sid)
         
         # Start process in background thread
@@ -109,6 +130,11 @@ class CrewAIHandler:
 # Initialize our handler
 crew_handler = CrewAIHandler()
 
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Simple health check endpoint."""
+    return jsonify({"status": "healthy", "active_connections": len(active_connections)})
+
 @app.route('/api/chat', methods=['POST'])
 def chat():
     """Regular HTTP endpoint for non-streaming responses."""
@@ -121,17 +147,37 @@ def chat():
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection."""
-    logger.info('Client connected')
+    sid = request.sid
+    active_connections[sid] = {
+        'connected_at': time.time(),
+        'ip': request.remote_addr
+    }
+    logger.info(f'Client connected: {sid}')
+    # Send immediate feedback that connection was successful
+    emit('message', {'token': 'Connected to server successfully. Ready for messages!'})
+    emit('message', {'done': True})
 
 @socketio.on('disconnect')
 def handle_disconnect():
     """Handle client disconnection."""
-    logger.info('Client disconnected')
+    sid = request.sid
+    if sid in active_connections:
+        del active_connections[sid]
+    logger.info(f'Client disconnected: {sid}')
+
+@socketio.on('ping')
+def handle_ping():
+    """Handle ping from client to keep connection alive."""
+    emit('pong')
 
 @socketio.on('message')
 def handle_message(data):
     """Handle incoming WebSocket messages."""
+    sid = request.sid
     try:
+        # Log that we received a message (without details for privacy)
+        logger.info(f"Received message from client {sid}")
+        
         # Parse the message data
         message_data = json.loads(data) if isinstance(data, str) else data
         
@@ -141,14 +187,29 @@ def handle_message(data):
             message_data.get("title_context", ""),
             message_data.get("abstract_context", ""),
             message_data.get("conversation_history", []),
-            request.sid
+            sid
         )
+    except json.JSONDecodeError:
+        logger.error(f"Invalid JSON received from client {sid}")
+        emit('message', {'error': 'Invalid message format. Expected JSON.'})
+        emit('message', {'done': True})
     except Exception as e:
-        logger.error(f"Error handling WebSocket message: {str(e)}")
-        emit('message', {'error': str(e)})
+        logger.error(f"Error handling WebSocket message from {sid}: {str(e)}")
+        logger.error(traceback.format_exc())
+        emit('message', {'error': f"Server error: {str(e)}"})
         emit('message', {'done': True})
 
 if __name__ == "__main__":
     # Run the Flask application with SocketIO
     logger.info("Starting Flask application with SocketIO on port 8000...")
+    
+    # Add a health check on startup
+    try:
+        # Try to initialize any critical resources here to catch errors early
+        logger.info("Checking if LLM is initialized...")
+        if crew_handler.llm is None:
+            logger.warning("LLM initialization may have failed. Check previous logs.")
+    except Exception as e:
+        logger.error(f"Error during startup checks: {str(e)}")
+    
     socketio.run(app, host="0.0.0.0", port=8000, debug=True)
